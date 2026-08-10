@@ -7,7 +7,7 @@
 if (!defined('ABSPATH')) exit;
 
 // -----------------------------------------------------------------------------
-// 1. CAPTURA DE UTMS VIA COOKIES (Salva por 30 dias)
+// 1. CAPTURA DE UTMS E GERAÇÃO DE EXTERNAL ID VIA COOKIES (Salva por 30 dias)
 // -----------------------------------------------------------------------------
 function fb_capture_utms()
 {
@@ -19,6 +19,12 @@ function fb_capture_utms()
             setcookie('gtm_' . $utm, $value, time() + (86400 * 30), '/');
             $_COOKIE['gtm_' . $utm] = $value;
         }
+    }
+
+    if (!isset($_COOKIE['bridge_ext_id'])) {
+        $ext_id = wp_generate_uuid4();
+        setcookie('bridge_ext_id', $ext_id, time() + (86400 * 180), '/');
+        $_COOKIE['bridge_ext_id'] = $ext_id;
     }
 }
 add_action('init', 'fb_capture_utms');
@@ -32,8 +38,8 @@ function fb_register_settings()
     register_setting('gtm_options_group', 'fb_pixel_id', ['type' => 'string', 'default' => '']);
     register_setting('gtm_options_group', 'fb_capi_token', ['type' => 'string', 'default' => '']);
     register_setting('gtm_options_group', 'fb_test_event_code', ['type' => 'string', 'default' => '']);
-    // NOVO: Registra a opção de ativar PageView via CAPI
     register_setting('gtm_options_group', 'fb_enable_pageview_capi', ['type' => 'string', 'default' => '0']);
+    register_setting('gtm_options_group', 'bridge_active_forms', ['type' => 'array', 'default' => []]);
 }
 add_action('admin_init', 'fb_register_settings');
 
@@ -66,7 +72,6 @@ function fb_settings_html()
                 <input type="text" id="fb_test_event_code" name="fb_test_event_code" value="<?php echo esc_attr($fb_test_code); ?>" placeholder="Ex: TEST30195" class="regular-text" />
             </td>
         </tr>
-        <!-- NOVO: Checkbox para Ativar PageView Server-Side -->
         <tr valign="top">
             <th scope="row">PageView Server-Side (CAPI)</th>
             <td>
@@ -74,14 +79,12 @@ function fb_settings_html()
                     <input type="checkbox" id="fb_enable_pageview_capi" name="fb_enable_pageview_capi" value="1" <?php checked('1', $fb_pv_capi); ?> />
                     Ativar envio do evento PageView via Servidor com Deduplicação (Event ID)
                 </label>
-                <p class="description">Garante que todas as visualizações de página sejam registradas via CAPI mesmo com AdBlockers ativados.</p>
             </td>
         </tr>
         <tr valign="top">
             <th scope="row"><label>Diagnóstico da API (Último Envio)</label></th>
             <td>
                 <textarea readonly style="width: 100%; height: 120px; background: #f0f0f1; border: 1px solid #8c8f94; font-family: monospace; padding: 10px;"><?php echo esc_textarea($last_debug); ?></textarea>
-                <p class="description">Mostra a resposta exata dos servidores da Meta ou do seu WordPress local.</p>
             </td>
         </tr>
     </table>
@@ -123,7 +126,6 @@ function fb_add_pixel_head()
         fbq('init', '<?php echo esc_js($fb_pixel); ?>');
 
         <?php if ($fb_pv_capi !== '1') : ?>
-            // Se o PageView CAPI estiver DESATIVADO, dispara o PageView padrão no navegador
             fbq('track', 'PageView');
         <?php endif; ?>
     </script>
@@ -147,7 +149,6 @@ function fb_send_capi_event($event_name, $email_raw = '', $event_source_url = ''
         return;
     }
 
-    // Monta dados do usuário
     $user_data = [
         'client_ip_address' => $_SERVER['REMOTE_ADDR'] ?? '',
         'client_user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
@@ -163,8 +164,10 @@ function fb_send_capi_event($event_name, $email_raw = '', $event_source_url = ''
     if (isset($_COOKIE['_fbc'])) {
         $user_data['fbc'] = sanitize_text_field($_COOKIE['_fbc']);
     }
+    if (isset($_COOKIE['bridge_ext_id'])) {
+        $user_data['external_id'] = [hash('sha256', sanitize_text_field($_COOKIE['bridge_ext_id']))];
+    }
 
-    // Monta a estrutura do evento
     $event_payload = [
         'event_name'       => $event_name,
         'event_time'       => time(),
@@ -173,12 +176,10 @@ function fb_send_capi_event($event_name, $email_raw = '', $event_source_url = ''
         'user_data'        => $user_data
     ];
 
-    // Se houver event_id (essencial para deduplicação de PageView), adiciona ao payload
     if (!empty($event_id)) {
         $event_payload['event_id'] = $event_id;
     }
 
-    // Anexa UTMs salvas nos cookies
     $custom_data = [];
     $utms = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'utm_id', 'fbclid', 'gclid'];
 
@@ -192,17 +193,13 @@ function fb_send_capi_event($event_name, $email_raw = '', $event_source_url = ''
         $event_payload['custom_data'] = $custom_data;
     }
 
-    $data = [
-        'data' => [$event_payload]
-    ];
+    $data = ['data' => [$event_payload]];
 
     if (!empty($fb_test_code)) {
         $data['test_event_code'] = sanitize_text_field($fb_test_code);
     }
 
     $url = "https://graph.facebook.com/v19.0/{$fb_pixel}/events?access_token={$fb_token}";
-
-    // Se for PageView, não bloqueia o carregamento da página ('blocking' => false)
     $is_pageview = ($event_name === 'PageView');
 
     $response = wp_remote_post($url, [
@@ -223,17 +220,15 @@ function fb_send_capi_event($event_name, $email_raw = '', $event_source_url = ''
 
 
 // -----------------------------------------------------------------------------
-// 5. DISPARO DE PAGEVIEW SERVER-SIDE (Com Deduplicação)
+// 5. DISPARO DE PAGEVIEW SERVER-SIDE
 // -----------------------------------------------------------------------------
 function fb_handle_pageview_capi()
 {
     $fb_pv_capi = get_option('fb_enable_pageview_capi', '0');
     if ($fb_pv_capi !== '1' || is_admin()) return;
 
-    // Generates a unique Event ID per request for deduplication
     $event_id = 'pv_' . uniqid() . '_' . time();
 
-    // 1. Injeta o disparo JS com o MESMO Event ID
     add_action('wp_head', function () use ($event_id) {
     ?>
         <script>
@@ -246,7 +241,6 @@ function fb_handle_pageview_capi()
 <?php
     }, 3);
 
-    // 2. Dispara a requisição CAPI Server-Side com o mesmo Event ID
     fb_send_capi_event('PageView', '', '', $event_id);
 }
 add_action('wp', 'fb_handle_pageview_capi');
@@ -257,6 +251,9 @@ add_action('wp', 'fb_handle_pageview_capi');
 // -----------------------------------------------------------------------------
 function fb_capi_wpforms_handler($fields, $entry, $form_data, $entry_id)
 {
+    $forms_ativos = get_option('bridge_active_forms', []);
+    if (!is_array($forms_ativos) || !in_array('wpforms', $forms_ativos)) return;
+
     $email = '';
     foreach ($fields as $field) {
         if ($field['type'] === 'email' && !empty($field['value'])) {
@@ -274,6 +271,9 @@ add_action('wpforms_process_complete', 'fb_capi_wpforms_handler', 10, 4);
 
 function fb_capi_cf7_handler($contact_form, $result)
 {
+    $forms_ativos = get_option('bridge_active_forms', []);
+    if (!is_array($forms_ativos) || !in_array('cf7', $forms_ativos)) return;
+
     if (in_array($result['status'], ['validation_failed', 'acceptance_missing', 'spam'])) {
         return;
     }
