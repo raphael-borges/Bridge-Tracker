@@ -206,3 +206,19 @@ function ga_mp_cf7_handler($contact_form, $result)
     ]);
 }
 add_action('wpcf7_submit', 'ga_mp_cf7_handler', 10, 2);
+
+
+function ga_mp_elementor_handler($record, $handler)
+{
+    $forms_ativos = get_option('bridge_active_forms', []);
+    if (!is_array($forms_ativos) || !in_array('elementor', $forms_ativos)) return;
+
+    $form_name = $record->get_form_settings('form_name');
+    $form_id   = $record->get_form_settings('id');
+
+    ga_send_mp_event('generate_lead', [
+        'form_id'   => !empty($form_id) ? $form_id : 'elementor_form',
+        'form_name' => !empty($form_name) ? $form_name : 'Formulário Elementor'
+    ]);
+}
+add_action('elementor_pro/forms/new_record', 'ga_mp_elementor_handler', 10, 2);

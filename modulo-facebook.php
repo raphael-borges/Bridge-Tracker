@@ -297,3 +297,30 @@ function fb_capi_cf7_handler($contact_form, $result)
     }
 }
 add_action('wpcf7_submit', 'fb_capi_cf7_handler', 10, 2);
+
+
+// -----------------------------------------------------------------------------
+// 7. INTEGRAÇÃO DE FORMULÁRIO (Elementor)
+// -----------------------------------------------------------------------------
+function fb_capi_elementor_handler($record, $handler)
+{
+    $forms_ativos = get_option('bridge_active_forms', []);
+    if (!is_array($forms_ativos) || !in_array('elementor', $forms_ativos)) return;
+
+    $raw_fields = $record->get('fields');
+    $email = '';
+
+    // Busca o campo de e-mail iterando pelos campos enviados
+    foreach ($raw_fields as $id => $field) {
+        if (is_email($field['value'])) {
+            $email = $field['value'];
+            break;
+        }
+    }
+
+    if (!empty($email)) {
+        $url = isset($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : home_url();
+        fb_send_capi_event('Lead', $email, $url);
+    }
+}
+add_action('elementor_pro/forms/new_record', 'fb_capi_elementor_handler', 10, 2);

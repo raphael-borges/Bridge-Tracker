@@ -1,8 +1,8 @@
-
-document.addEventListener('wpformsAjaxSubmitSuccess_native', function (event) {
+document.addEventListener('elementorSubmitSuccess_native', function (event) {
     var form = event.detail.form;
 
-    var formId = form.getAttribute('data-formid') || form.getAttribute('id') || '';
+    var formName = form.getAttribute('name') || 'Elementor Form';
+    var formId = form.getAttribute('id') || '';
 
     var emailInput = form.querySelector('input[type="email"]');
     var phoneInput = form.querySelector('input[type="tel"]');
@@ -10,7 +10,7 @@ document.addEventListener('wpformsAjaxSubmitSuccess_native', function (event) {
     bridgeBuildEventData({
         email: emailInput ? emailInput.value : '',
         phone: phoneInput ? phoneInput.value : '',
-        form_name: 'WPForms',
+        form_name: formName,
         form_id: formId
     });
 });

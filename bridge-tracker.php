@@ -3,7 +3,7 @@
 /**
  * Plugin Name: Bridge Tracker
  * Description: Gerenciador de pixels e APIs de conversão (Meta e GA4) com rastreamento de UTMs.
- * Version: 1.0.1
+ * Version: 1.1.2
  * Author: Raphael
  */
 
